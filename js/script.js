@@ -32,22 +32,25 @@ document.addEventListener('DOMContentLoaded', function () {
         const pdfOnly = files.filter(f => f.type === 'application/pdf');
         if (pdfOnly.length !== files.length) {
             alert('Only PDF files are allowed.');
+            fileInput.value = '';
             return;
         }
 
         // Limit the number of files to 12
         if (pdfFiles.length + pdfOnly.length > 12) {
             alert('You can upload a maximum of 12 files.');
+            fileInput.value = '';
             return;
         }
 
         pdfOnly.forEach(file => {
-            if (!pdfFiles.some(f => f.name === file.name)) {
-                pdfFiles.push(file);
-            }
+            pdfFiles.push(file);
         });
         renderFiles();
         updateUI();
+
+        // THIS LINE IS IMPORTANT
+        fileInput.value = '';
     }
 
     function renderFiles() {
@@ -118,6 +121,11 @@ document.addEventListener('DOMContentLoaded', function () {
         downloadButton.disabled = true;
     }
 
+    // Detect if the browser supports Web Workers
+    function isWorkerSupported() {
+        return typeof Worker !== "undefined";
+    }
+
     mergeButton.addEventListener('click', () => {
         if (pdfFiles.length < 2) return;
 
@@ -125,31 +133,78 @@ document.addEventListener('DOMContentLoaded', function () {
         mergeStatus.classList.remove('hidden');
         mergeStatus.textContent = "Merging PDFs...";
 
-        const workerCode = `
-            importScripts('https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js');
-            self.onmessage = async (e) => {
-                const filesData = e.data.filesData;
-                const mergedPdf = await PDFLib.PDFDocument.create();
-                for (let i = 0; i < filesData.length; i++) {
-                    const { buffer } = filesData[i];
-                    const pdf = await PDFLib.PDFDocument.load(buffer);
-                    const pages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
-                    pages.forEach(p => mergedPdf.addPage(p));
-                }
-                const mergedBytes = await mergedPdf.save();
-                self.postMessage({ type: 'done', mergedBytes }, [mergedBytes.buffer]);
-            };
-        `;
-        const blob = new Blob([workerCode], { type: 'application/javascript' });
-        const worker = new Worker(URL.createObjectURL(blob));
+        // Handle PDF merging in Web Worker or main thread
+        if (isWorkerSupported()) {
+            const workerCode = `
+                importScripts('https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js');
+                self.onmessage = async (e) => {
+                    try {
+                        const filesData = e.data.filesData;
+                        const mergedPdf = await PDFLib.PDFDocument.create();
+                        for (let i = 0; i < filesData.length; i++) {
+                            const { buffer } = filesData[i];
+                            const pdf = await PDFLib.PDFDocument.load(buffer);
+                            const pages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
+                            pages.forEach(p => mergedPdf.addPage(p));
+                        }
+                        const mergedBytes = await mergedPdf.save();
+                        self.postMessage({ type: 'done', mergedBytes }, [mergedBytes.buffer]);
+                    } catch (err) {
+                        self.postMessage({ type: 'error', error: err.message });
+                    }
+                };
+            `;
 
-        Promise.all(pdfFiles.map(file => file.arrayBuffer().then(buffer => ({ buffer })))).then(filesData =>
-            worker.postMessage({ filesData }, filesData.map(f => f.buffer))
+            const blob = new Blob([workerCode], { type: 'application/javascript' });
+            const worker = new Worker(URL.createObjectURL(blob));
+
+            Promise.all(pdfFiles.map(file => file.arrayBuffer().then(buffer => ({ buffer })))).then(filesData => {
+                worker.postMessage({ filesData });
+            });
+
+            worker.onmessage = (e) => {
+                if (e.data.type === 'done') {
+                    const mergedBytes = e.data.mergedBytes;
+                    const blobPdf = new Blob([mergedBytes], { type: 'application/pdf' });
+                    mergedPdfUrl = URL.createObjectURL(blobPdf);
+
+                    spinner.classList.add('hidden');
+                    mergeStatus.textContent = "PDFs merged successfully!";
+                    setTimeout(() => mergeStatus.classList.add('hidden'), 2000);
+
+                    previewButton.disabled = false;
+                    downloadButton.disabled = false;
+
+                    worker.terminate();
+                } else if (e.data.type === 'error') {
+                    console.error('Error in worker:', e.data.error);
+                    spinner.classList.add('hidden');
+                    mergeStatus.textContent = 'Error merging PDFs';
+                    setTimeout(() => mergeStatus.classList.add('hidden'), 2000);
+                }
+            };
+        } else {
+            // Merge in the main thread if Web Workers are not supported
+            mergePDFs(pdfFiles);
+        }
+    });
+
+    function mergePDFs(files) {
+        const mergedPdf = PDFLib.PDFDocument.create();
+
+        const filePromises = files.map(file =>
+            file.arrayBuffer().then(buffer => PDFLib.PDFDocument.load(buffer))
         );
 
-        worker.onmessage = (e) => {
-            if (e.data.type === 'done') {
-                const mergedBytes = e.data.mergedBytes;
+        Promise.all(filePromises).then(pdfs => {
+            pdfs.forEach(pdf => {
+                const pages = pdf.getPages();
+                pages.forEach(page => {
+                    mergedPdf.addPage(page);
+                });
+            });
+
+            mergedPdf.save().then(mergedBytes => {
                 const blobPdf = new Blob([mergedBytes], { type: 'application/pdf' });
                 mergedPdfUrl = URL.createObjectURL(blobPdf);
 
@@ -159,11 +214,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 previewButton.disabled = false;
                 downloadButton.disabled = false;
-
-                worker.terminate();
-            }
-        };
-    });
+            });
+        }).catch(err => {
+            console.error('Error merging PDFs:', err);
+            spinner.classList.add('hidden');
+            mergeStatus.textContent = 'Error merging PDFs';
+            setTimeout(() => mergeStatus.classList.add('hidden'), 2000);
+        });
+    }
 
     previewButton.addEventListener('click', () => {
         if (mergedPdfUrl) {
@@ -180,7 +238,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 });
-
 
 document.addEventListener('keydown', function(e) {
     // Block F12
@@ -204,3 +261,4 @@ document.addEventListener('keydown', function(e) {
         e.preventDefault();
     }
 });
+
