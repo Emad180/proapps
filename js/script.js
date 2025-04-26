@@ -184,7 +184,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             };
         } else {
-            // Merge in the main thread if Web Workers are not supported
+            // If Web Workers are not supported, merge in the main thread
             mergePDFs(pdfFiles);
         }
     });
@@ -238,6 +238,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 });
+
 
 document.addEventListener('keydown', function(e) {
     // Block F12
