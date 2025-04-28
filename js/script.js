@@ -4,14 +4,18 @@ document.addEventListener('DOMContentLoaded', function () {
     const fileList = document.getElementById('fileList');
     const filesContainer = document.getElementById('files');
     const mergeButton = document.getElementById('mergeButton');
-    const spinner = mergeButton.querySelector('.spinner');
-    const mergeStatus = mergeButton.querySelector('.merge-status');
+    const spinnerWrapper = document.getElementById('spinner-wrapper'); // Reference the new wrapper
+    const spinner = spinnerWrapper.querySelector('.spinner');
+    const mergeStatus = spinnerWrapper.querySelector('.merge-status');    
     const previewButton = document.getElementById('previewButton');
     const downloadButton = document.getElementById('downloadButton');
 
     const pdfFiles = [];
     let dragSrcIndex = null;
     let mergedPdfUrl = null;
+
+    // Initially, ensure the spinner is hidden
+    spinner.classList.add('hidden');
 
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
@@ -128,25 +132,42 @@ document.addEventListener('DOMContentLoaded', function () {
 
     mergeButton.addEventListener('click', () => {
         if (pdfFiles.length < 2) return;
-
+    
+        spinnerWrapper.classList.remove('hidden');
         spinner.classList.remove('hidden');
         mergeStatus.classList.remove('hidden');
         mergeStatus.textContent = "Merging PDFs...";
-
-        // Handle PDF merging in Web Worker or main thread
+        mergeButton.disabled = true;
+    
         if (isWorkerSupported()) {
             const workerCode = `
                 importScripts('https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js');
+    
                 self.onmessage = async (e) => {
                     try {
                         const filesData = e.data.filesData;
                         const mergedPdf = await PDFLib.PDFDocument.create();
-                        for (let i = 0; i < filesData.length; i++) {
-                            const { buffer } = filesData[i];
-                            const pdf = await PDFLib.PDFDocument.load(buffer);
-                            const pages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
-                            pages.forEach(p => mergedPdf.addPage(p));
+                        const encryptedFiles = [];
+    
+                        for (const file of filesData) {
+                            try {
+                                const srcPdf = await PDFLib.PDFDocument.load(file.buffer);
+                                const copiedPages = await mergedPdf.copyPages(srcPdf, srcPdf.getPageIndices());
+                                copiedPages.forEach((page) => mergedPdf.addPage(page));
+                            } catch (err) {
+                                if (err.message.includes('encrypted')) {
+                                    encryptedFiles.push(file.name);
+                                } else {
+                                    throw err;
+                                }
+                            }
                         }
+    
+                        if (encryptedFiles.length > 0) {
+                            self.postMessage({ type: 'encrypted', encryptedFiles });
+                            return;
+                        }
+    
                         const mergedBytes = await mergedPdf.save();
                         self.postMessage({ type: 'done', mergedBytes }, [mergedBytes.buffer]);
                     } catch (err) {
@@ -154,40 +175,93 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                 };
             `;
-
+    
             const blob = new Blob([workerCode], { type: 'application/javascript' });
             const worker = new Worker(URL.createObjectURL(blob));
-
-            Promise.all(pdfFiles.map(file => file.arrayBuffer().then(buffer => ({ buffer })))).then(filesData => {
+    
+            Promise.all(
+                pdfFiles.map(file =>
+                    file.arrayBuffer().then(buffer => ({ buffer, name: file.name }))
+                )
+            ).then(filesData => {
                 worker.postMessage({ filesData });
             });
-
+    
             worker.onmessage = (e) => {
                 if (e.data.type === 'done') {
                     const mergedBytes = e.data.mergedBytes;
                     const blobPdf = new Blob([mergedBytes], { type: 'application/pdf' });
                     mergedPdfUrl = URL.createObjectURL(blobPdf);
-
-                    spinner.classList.add('hidden');
-                    mergeStatus.textContent = "PDFs merged successfully!";
+    
+                    spinnerWrapper.classList.add('hidden');
+                    mergeStatus.textContent = `PDFs merged successfully! preview or download`;
                     setTimeout(() => mergeStatus.classList.add('hidden'), 2000);
-
+    
                     previewButton.disabled = false;
                     downloadButton.disabled = false;
+                    mergeButton.disabled = false;
+                    worker.terminate();
+                } else if (e.data.type === 'encrypted') {
+                    spinnerWrapper.classList.add('hidden');
+                    spinner.classList.add('hidden');
+                    mergeStatus.classList.add('hidden');
+    
+                    const encryptedFilesList = e.data.encryptedFiles.join(',');
+                    // mergeStatus.textContent = `Cannot merge. Encrypted file(s) detected: ${encryptedFilesList}`;
 
+                    mergeStatus.innerHTML = `
+                        <div style="
+                          position: relative;
+                          padding: 16px 20px;
+                          background-color: #f8d7da;
+                          color: #721c24;
+                          border: 1px solid #f5c6cb;
+                          border-radius: 8px;
+                          font-size: 16px;
+                          max-width: 400px;
+                          margin: 10px auto;
+                          text-align: left;
+                        ">
+                          <button id="closeStatus" style="
+                            position: absolute;
+                            top: 8px;
+                            right: 8px;
+                            background: none;
+                            border: none;
+                            font-size: 20px;
+                            color: red;
+                            cursor: pointer;
+                            font-weight: bold;
+                          ">&times;</button>
+                          Encrypted file(s) detected: ${encryptedFilesList}. <br>
+                          This is security-first application and hence can not merge encrypted files.
+                        </div>
+                      `;
+                    setTimeout(() => mergeStatus.classList.add('hidden'), 8000);  
+                    document.getElementById('closeStatus').addEventListener('click', () => {
+                    mergeStatus.classList.add('hidden');
+                    });
+                    mergeStatus.classList.remove('hidden');
+    
+                    mergeButton.disabled = false;
                     worker.terminate();
                 } else if (e.data.type === 'error') {
                     console.error('Error in worker:', e.data.error);
+                    spinnerWrapper.classList.add('hidden');
                     spinner.classList.add('hidden');
                     mergeStatus.textContent = 'Error merging PDFs';
                     setTimeout(() => mergeStatus.classList.add('hidden'), 2000);
+    
+                    mergeButton.disabled = false;
+                    worker.terminate();
                 }
+                spinner.classList.add('hidden');
             };
         } else {
-            // If Web Workers are not supported, merge in the main thread
             mergePDFs(pdfFiles);
         }
     });
+    
 
     function mergePDFs(files) {
         const mergedPdf = PDFLib.PDFDocument.create();
@@ -208,18 +282,23 @@ document.addEventListener('DOMContentLoaded', function () {
                 const blobPdf = new Blob([mergedBytes], { type: 'application/pdf' });
                 mergedPdfUrl = URL.createObjectURL(blobPdf);
 
-                spinner.classList.add('hidden');
-                mergeStatus.textContent = "PDFs merged successfully!";
+                // Hide the spinner and show success message
+                spinnerWrapper.classList.add('hidden');
+                mergeStatus.textContent = `PDFs merged successfully! preview or download`;
                 setTimeout(() => mergeStatus.classList.add('hidden'), 2000);
 
                 previewButton.disabled = false;
                 downloadButton.disabled = false;
+
+                mergeButton.disabled = false; // Re-enable the merge button
             });
         }).catch(err => {
             console.error('Error merging PDFs:', err);
-            spinner.classList.add('hidden');
+            spinnerWrapper.classList.add('hidden');
             mergeStatus.textContent = 'Error merging PDFs';
             setTimeout(() => mergeStatus.classList.add('hidden'), 2000);
+
+            mergeButton.disabled = false; // Re-enable the merge button
         });
     }
 

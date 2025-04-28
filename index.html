@@ -64,9 +64,13 @@
             <div class="button-container">
                 <button id="mergeButton" class="merge-button" disabled title="Upload PDF files first">
                     Merge PDFs
-                    <div class="spinner hidden"></div>
-                    <div class="merge-status hidden">Merging PDFs...</div>
                 </button>
+               
+                <div id="spinner-wrapper" class="spinner-wrapper hidden">
+                    <div class="spinner"></div>
+                    <div class="merge-status"></div>
+                </div>
+
                 <button id="previewButton" class="preview-button" disabled title="Merge the uploaded PDF files first">
                     Preview PDFs
                 </button>
