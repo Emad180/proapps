@@ -327,6 +327,10 @@ h1 {
     height: 75vh;
 }
 
+#text{
+    width: 75%; text-align: justify; margin-left: 13%;
+}
+
 @media (max-width: 768px) {
     .main-container {
         justify-content: space-between;
@@ -343,6 +347,9 @@ h1 {
 
     .right-ad-container {
         display: none;
+    }
+    #text{
+    width: 95%; text-align: justify; margin-left: 3%;
     }
 }
 
