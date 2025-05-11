@@ -328,7 +328,7 @@ h1 {
 }
 
 #text{
-    width: 75%; text-align: justify; margin-left: 13%;
+    width: 75%; text-align: justify; margin-left: 13%; margin-top: 30px;
 }
 
 @media (max-width: 768px) {
